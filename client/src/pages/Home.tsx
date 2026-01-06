@@ -7,17 +7,21 @@ export default function Home() {
   const imageRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [positionStart, setPositionStart] = useState({ x: 0, y: 0 });
-  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0, naturalWidth: 0, naturalHeight: 0 });
+  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
+  const [imageLoaded, setImageLoaded] = useState(false);
   
-  // ピンチズーム用の状態
-  const [initialPinchDistance, setInitialPinchDistance] = useState(0);
-  const [initialPinchScale, setInitialPinchScale] = useState(1);
-  const [pinchCenter, setPinchCenter] = useState({ x: 0, y: 0 });
-  const [initialPinchPosition, setInitialPinchPosition] = useState({ x: 0, y: 0 });
+  // タッチ操作用のref（stateではなくrefを使用して無限ループを防ぐ）
+  const touchStateRef = useRef({
+    isDragging: false,
+    dragStart: { x: 0, y: 0 },
+    positionStart: { x: 0, y: 0 },
+    initialPinchDistance: 0,
+    initialPinchScale: 1,
+    pinchCenter: { x: 0, y: 0 },
+    initialPinchPosition: { x: 0, y: 0 },
+    isPinching: false,
+  });
 
   const minScale = 1;
   const maxScale = 4;
@@ -27,7 +31,6 @@ export default function Home() {
     const updateViewportHeight = () => {
       const vh = window.innerHeight;
       setViewportHeight(vh);
-      document.documentElement.style.setProperty('--vh', `${vh}px`);
     };
 
     updateViewportHeight();
@@ -40,9 +43,10 @@ export default function Home() {
     };
   }, []);
 
-  // 位置の制限（余白が見えないように）
-  const clampPosition = useCallback((x: number, y: number, currentScale: number) => {
+  // 位置の制限（余白が見えないように）- ピンチ中は制限しない
+  const clampPosition = useCallback((x: number, y: number, currentScale: number, allowOverflow: boolean = false) => {
     if (!containerRef.current || imageDimensions.width === 0) return { x, y };
+    if (allowOverflow) return { x, y }; // ピンチ中は制限しない
     
     const containerWidth = containerRef.current.offsetWidth;
     const containerHeight = viewportHeight;
@@ -71,7 +75,7 @@ export default function Home() {
     }
     
     return { x: clampedX, y: clampedY };
-  }, [imageDimensions, viewportHeight]);
+  }, [imageDimensions.width, imageDimensions.height, viewportHeight]);
 
   // 画像読み込み完了時
   const handleImageLoad = useCallback(() => {
@@ -85,33 +89,14 @@ export default function Home() {
       setImageDimensions({
         width: displayWidth,
         height: displayHeight,
-        naturalWidth: img.naturalWidth,
-        naturalHeight: img.naturalHeight,
       });
       
       // 初期位置を中央に設定
-      const initialX = displayWidth > containerWidth ? (containerWidth - displayWidth) / 2 : (containerWidth - displayWidth) / 2;
+      const initialX = (containerWidth - displayWidth) / 2;
       setPosition({ x: initialX, y: 0 });
+      setImageLoaded(true);
     }
   }, [viewportHeight]);
-
-  // ビューポート変更時に再計算
-  useEffect(() => {
-    if (imageRef.current && containerRef.current && imageRef.current.complete && imageDimensions.naturalWidth > 0) {
-      const containerWidth = containerRef.current.offsetWidth;
-      const aspectRatio = imageDimensions.naturalWidth / imageDimensions.naturalHeight;
-      const displayHeight = viewportHeight;
-      const displayWidth = displayHeight * aspectRatio;
-      
-      setImageDimensions(prev => ({
-        ...prev,
-        width: displayWidth,
-        height: displayHeight,
-      }));
-      
-      setPosition(prev => clampPosition(prev.x, prev.y, scale));
-    }
-  }, [viewportHeight, scale, clampPosition, imageDimensions.naturalWidth, imageDimensions.naturalHeight]);
 
   // ズームイン（ボタン）
   const handleZoomIn = useCallback(() => {
@@ -160,34 +145,10 @@ export default function Home() {
     if (containerRef.current && imageDimensions.width > 0) {
       const containerWidth = containerRef.current.offsetWidth;
       setScale(1);
-      const initialX = imageDimensions.width > containerWidth 
-        ? (containerWidth - imageDimensions.width) / 2 
-        : (containerWidth - imageDimensions.width) / 2;
+      const initialX = (containerWidth - imageDimensions.width) / 2;
       setPosition({ x: initialX, y: 0 });
     }
   }, [imageDimensions.width]);
-
-  // マウスドラッグ開始
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    setDragStart({ x: e.clientX, y: e.clientY });
-    setPositionStart(position);
-  }, [position]);
-
-  // マウスドラッグ中
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDragging) return;
-    const deltaX = e.clientX - dragStart.x;
-    const deltaY = e.clientY - dragStart.y;
-    const newPos = clampPosition(positionStart.x + deltaX, positionStart.y + deltaY, scale);
-    setPosition(newPos);
-  }, [isDragging, dragStart, positionStart, scale, clampPosition]);
-
-  // マウスドラッグ終了
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
 
   // 2点間の距離と中心点を計算
   const getPinchData = (touches: React.TouchList) => {
@@ -201,56 +162,99 @@ export default function Home() {
 
   // タッチ開始
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const state = touchStateRef.current;
+    
     if (e.touches.length === 1) {
       // シングルタッチ（ドラッグ）
-      setIsDragging(true);
-      setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
-      setPositionStart(position);
+      state.isDragging = true;
+      state.isPinching = false;
+      state.dragStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      state.positionStart = { ...position };
     } else if (e.touches.length === 2) {
       // ピンチズーム開始
-      setIsDragging(false);
+      state.isDragging = false;
+      state.isPinching = true;
       const { distance, centerX, centerY } = getPinchData(e.touches);
-      setInitialPinchDistance(distance);
-      setInitialPinchScale(scale);
-      setPinchCenter({ x: centerX, y: centerY });
-      setInitialPinchPosition(position);
+      state.initialPinchDistance = distance;
+      state.initialPinchScale = scale;
+      state.pinchCenter = { x: centerX, y: centerY };
+      state.initialPinchPosition = { ...position };
     }
   }, [position, scale]);
 
   // タッチ移動
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (e.touches.length === 1 && isDragging) {
+    const state = touchStateRef.current;
+    
+    if (e.touches.length === 1 && state.isDragging && !state.isPinching) {
       // シングルタッチ（ドラッグ）
-      const deltaX = e.touches[0].clientX - dragStart.x;
-      const deltaY = e.touches[0].clientY - dragStart.y;
-      const newPos = clampPosition(positionStart.x + deltaX, positionStart.y + deltaY, scale);
+      const deltaX = e.touches[0].clientX - state.dragStart.x;
+      const deltaY = e.touches[0].clientY - state.dragStart.y;
+      const newPos = clampPosition(
+        state.positionStart.x + deltaX, 
+        state.positionStart.y + deltaY, 
+        scale
+      );
       setPosition(newPos);
-    } else if (e.touches.length === 2 && initialPinchDistance > 0) {
+    } else if (e.touches.length === 2 && state.isPinching && state.initialPinchDistance > 0) {
       // ピンチズーム - 指の中心点を基準に拡大
       const { distance } = getPinchData(e.touches);
-      const scaleChange = distance / initialPinchDistance;
-      const newScale = Math.min(Math.max(initialPinchScale * scaleChange, minScale), maxScale);
+      const scaleChange = distance / state.initialPinchDistance;
+      const newScale = Math.min(Math.max(state.initialPinchScale * scaleChange, minScale), maxScale);
       
       // ピンチ中心点を基準にズーム
-      const scaleRatio = newScale / initialPinchScale;
-      const newX = pinchCenter.x - (pinchCenter.x - initialPinchPosition.x) * scaleRatio;
-      const newY = pinchCenter.y - (pinchCenter.y - initialPinchPosition.y) * scaleRatio;
+      const scaleRatio = newScale / state.initialPinchScale;
+      const newX = state.pinchCenter.x - (state.pinchCenter.x - state.initialPinchPosition.x) * scaleRatio;
+      const newY = state.pinchCenter.y - (state.pinchCenter.y - state.initialPinchPosition.y) * scaleRatio;
       
       setScale(newScale);
-      // ピンチ中は余白を許容（指を離したときに制限）
+      // ピンチ中は余白を許容
       setPosition({ x: newX, y: newY });
     }
-  }, [isDragging, dragStart, positionStart, scale, clampPosition, initialPinchDistance, initialPinchScale, pinchCenter, initialPinchPosition]);
+  }, [scale, clampPosition]);
 
   // タッチ終了
   const handleTouchEnd = useCallback(() => {
-    setIsDragging(false);
-    if (initialPinchDistance > 0) {
-      // ピンチ終了時に位置を制限
+    const state = touchStateRef.current;
+    
+    if (state.isPinching) {
+      // ピンチ終了時に位置を制限（余白を消す）
       setPosition(pos => clampPosition(pos.x, pos.y, scale));
     }
-    setInitialPinchDistance(0);
-  }, [initialPinchDistance, scale, clampPosition]);
+    
+    state.isDragging = false;
+    state.isPinching = false;
+    state.initialPinchDistance = 0;
+  }, [scale, clampPosition]);
+
+  // マウスドラッグ開始
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const state = touchStateRef.current;
+    state.isDragging = true;
+    state.dragStart = { x: e.clientX, y: e.clientY };
+    state.positionStart = { ...position };
+  }, [position]);
+
+  // マウスドラッグ中
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const state = touchStateRef.current;
+    if (!state.isDragging) return;
+    
+    const deltaX = e.clientX - state.dragStart.x;
+    const deltaY = e.clientY - state.dragStart.y;
+    const newPos = clampPosition(
+      state.positionStart.x + deltaX, 
+      state.positionStart.y + deltaY, 
+      scale
+    );
+    setPosition(newPos);
+  }, [scale, clampPosition]);
+
+  // マウスドラッグ終了
+  const handleMouseUp = useCallback(() => {
+    touchStateRef.current.isDragging = false;
+  }, []);
 
   // ホイールでズーム
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -279,7 +283,9 @@ export default function Home() {
 
   // グローバルマウスアップ
   useEffect(() => {
-    const handleGlobalMouseUp = () => setIsDragging(false);
+    const handleGlobalMouseUp = () => {
+      touchStateRef.current.isDragging = false;
+    };
     window.addEventListener('mouseup', handleGlobalMouseUp);
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
   }, []);
@@ -298,7 +304,7 @@ export default function Home() {
       onWheel={handleWheel}
       style={{ 
         touchAction: 'none', 
-        cursor: isDragging ? 'grabbing' : 'grab',
+        cursor: touchStateRef.current.isDragging ? 'grabbing' : 'grab',
         height: `${viewportHeight}px`,
       }}
     >
@@ -315,16 +321,16 @@ export default function Home() {
           maxWidth: 'none',
           transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
           transformOrigin: 'top left',
-          transition: isDragging || initialPinchDistance > 0 ? 'none' : 'transform 0.1s ease-out',
+          transition: touchStateRef.current.isDragging || touchStateRef.current.isPinching ? 'none' : 'transform 0.15s ease-out',
         }}
         onLoad={handleImageLoad}
       />
 
-      {/* Zoom Controls - 画面下部に固定（URL欄より上） */}
+      {/* Zoom Controls - 画面下部に固定 */}
       <div 
-        className="absolute flex flex-col gap-2 z-50"
+        className="fixed flex flex-col gap-2 z-50"
         style={{
-          bottom: '120px',
+          bottom: '100px',
           right: '16px',
         }}
       >
@@ -367,9 +373,9 @@ export default function Home() {
 
       {/* Scale Indicator - 左下に固定 */}
       <div 
-        className="absolute z-40 pointer-events-none opacity-80"
+        className="fixed z-40 pointer-events-none opacity-80"
         style={{
-          bottom: '120px',
+          bottom: '100px',
           left: '16px',
         }}
       >
