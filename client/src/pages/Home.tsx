@@ -1,11 +1,29 @@
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, RotateCcw, Map as MapIcon } from "lucide-react";
 import { TransformWrapper, TransformComponent, ReactZoomPanPinchContentRef } from "react-zoom-pan-pinch";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 export default function Home() {
   const transformComponentRef = useRef<ReactZoomPanPinchContentRef>(null);
   const [scale, setScale] = useState(1);
+  const [minScale, setMinScale] = useState(1);
+
+  // 画面サイズに合わせて最小スケールを計算し、縦フィットを実現する
+  useEffect(() => {
+    const calculateMinScale = () => {
+      // 画像のアスペクト比と画面のアスペクト比を比較して、
+      // 画面の高さいっぱいに表示するためのスケールを計算するロジックが必要だが、
+      // ここではCSSで高さを100vhに固定しているため、
+      // TransformWrapperの初期スケールと最小スケールを1に設定することで
+      // 「縦フィット」かつ「それ以上縮小できない」状態を作る。
+      // 横方向の余白制限は limitToBounds={true} で実現する。
+      setMinScale(1);
+    };
+
+    calculateMinScale();
+    window.addEventListener('resize', calculateMinScale);
+    return () => window.removeEventListener('resize', calculateMinScale);
+  }, []);
 
   const handleZoomIn = () => {
     if (transformComponentRef.current) {
@@ -31,24 +49,33 @@ export default function Home() {
       <TransformWrapper
         ref={transformComponentRef}
         initialScale={1}
-        minScale={0.5}
+        minScale={1} // 最小スケールを1に設定（縦フィット状態より小さくならない）
         maxScale={4}
         centerOnInit={true}
-        limitToBounds={false}
+        limitToBounds={true} // 画像の範囲外への移動（余白表示）を制限
         onZoom={(ref) => setScale(ref.state.scale)}
         wheel={{ step: 0.1 }}
         pinch={{ step: 5 }}
+        alignmentAnimation={{ sizeX: 0, sizeY: 0 }} // アニメーション時の余白調整
       >
         <TransformComponent
           wrapperClass="!w-screen !h-screen"
-          contentClass="!w-full !h-full flex items-center justify-center"
+          contentClass="!w-full !h-full flex items-center justify-center" // justify-centerで横方向は中央寄せ（初期表示時）
         >
           <img
             src="/map.png"
             alt="Hakusekikan Park Map"
-            className="h-full w-auto max-w-none object-contain shadow-2xl"
+            // h-[100vh] w-auto: 高さを画面いっぱいに固定、幅はアスペクト比維持
+            // max-w-none: 親要素の幅制限を受けないようにする
+            className="h-[100vh] w-auto max-w-none object-cover shadow-2xl"
             style={{
               filter: "sepia(0.1) contrast(1.05)", // Slight retro feel
+            }}
+            onLoad={() => {
+               // 画像読み込み完了時にリセットして正しい位置・スケールを適用
+               if(transformComponentRef.current) {
+                 transformComponentRef.current.resetTransform();
+               }
             }}
           />
         </TransformComponent>
