@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { ZoomIn, ZoomOut, RotateCcw, Map as MapIcon } from "lucide-react";
+import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { useRef, useState, useEffect, useCallback } from "react";
 
 export default function Home() {
@@ -10,11 +10,38 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [startX, setStartX] = useState(0);
   const [startTranslateX, setStartTranslateX] = useState(0);
-  const [imageLoaded, setImageLoaded] = useState(false);
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+  const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
+  
+  // ピンチズーム用の状態
+  const [initialPinchDistance, setInitialPinchDistance] = useState(0);
+  const [initialPinchScale, setInitialPinchScale] = useState(1);
 
   const minScale = 1;
   const maxScale = 4;
+
+  // ビューポートの高さを取得（モバイルブラウザのURL欄を考慮）
+  useEffect(() => {
+    const updateViewportHeight = () => {
+      // CSS変数でビューポート高さを設定
+      const vh = window.innerHeight;
+      setViewportHeight(vh);
+      document.documentElement.style.setProperty('--vh', `${vh}px`);
+    };
+
+    updateViewportHeight();
+    window.addEventListener('resize', updateViewportHeight);
+    window.addEventListener('orientationchange', updateViewportHeight);
+    
+    // モバイルブラウザでスクロール時にURL欄が隠れた時の対応
+    window.addEventListener('scroll', updateViewportHeight);
+
+    return () => {
+      window.removeEventListener('resize', updateViewportHeight);
+      window.removeEventListener('orientationchange', updateViewportHeight);
+      window.removeEventListener('scroll', updateViewportHeight);
+    };
+  }, []);
 
   // translateXの範囲を制限する関数
   const clampTranslateX = useCallback((x: number, currentScale: number, imgWidth: number) => {
@@ -23,35 +50,29 @@ export default function Home() {
     const containerWidth = containerRef.current.offsetWidth;
     const scaledImageWidth = imgWidth * currentScale;
     
-    // 画像幅が画面幅以下の場合は中央に固定
     if (scaledImageWidth <= containerWidth) {
       return (containerWidth - scaledImageWidth) / 2;
     }
     
-    // 画像の左端が画面左端より右に行かない（左側に余白が出ない）
     const maxX = 0;
-    // 画像の右端が画面右端より左に行かない（右側に余白が出ない）
     const minX = containerWidth - scaledImageWidth;
     
     return Math.min(maxX, Math.max(minX, x));
   }, []);
 
-  // 画像読み込み完了時に寸法を取得し、初期位置を中央に設定
+  // 画像読み込み完了時
   const handleImageLoad = useCallback(() => {
     if (imageRef.current && containerRef.current) {
       const img = imageRef.current;
       const containerWidth = containerRef.current.offsetWidth;
-      const screenHeight = window.innerHeight;
       const aspectRatio = img.naturalWidth / img.naturalHeight;
-      const displayWidth = screenHeight * aspectRatio;
+      const displayWidth = viewportHeight * aspectRatio;
       
       setImageDimensions({
         width: displayWidth,
-        height: screenHeight,
+        height: viewportHeight,
       });
-      setImageLoaded(true);
       
-      // 初期位置を中央に設定（画像幅が画面幅より大きい場合）
       if (displayWidth > containerWidth) {
         const centerX = (containerWidth - displayWidth) / 2;
         setTranslateX(centerX);
@@ -59,7 +80,24 @@ export default function Home() {
         setTranslateX((containerWidth - displayWidth) / 2);
       }
     }
-  }, []);
+  }, [viewportHeight]);
+
+  // ビューポート高さ変更時に再計算
+  useEffect(() => {
+    if (imageRef.current && containerRef.current && imageRef.current.complete) {
+      const img = imageRef.current;
+      const containerWidth = containerRef.current.offsetWidth;
+      const aspectRatio = img.naturalWidth / img.naturalHeight;
+      const displayWidth = viewportHeight * aspectRatio;
+      
+      setImageDimensions({
+        width: displayWidth,
+        height: viewportHeight,
+      });
+      
+      setTranslateX(x => clampTranslateX(x, scale, displayWidth));
+    }
+  }, [viewportHeight, scale, clampTranslateX]);
 
   // ズームイン
   const handleZoomIn = useCallback(() => {
@@ -83,7 +121,7 @@ export default function Home() {
     });
   }, [clampTranslateX, imageDimensions.width]);
 
-  // リセット（中央に戻す）
+  // リセット
   const handleReset = useCallback(() => {
     if (containerRef.current) {
       const containerWidth = containerRef.current.offsetWidth;
@@ -97,7 +135,7 @@ export default function Home() {
     }
   }, [imageDimensions.width]);
 
-  // ドラッグ開始（マウス）
+  // マウスドラッグ
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -105,7 +143,6 @@ export default function Home() {
     setStartTranslateX(translateX);
   }, [translateX]);
 
-  // ドラッグ中（マウス）
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging) return;
     const deltaX = e.clientX - startX;
@@ -113,31 +150,56 @@ export default function Home() {
     setTranslateX(newTranslateX);
   }, [isDragging, startX, startTranslateX, scale, clampTranslateX, imageDimensions.width]);
 
-  // ドラッグ終了（マウス）
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
   }, []);
 
+  // 2点間の距離を計算
+  const getDistance = (touches: React.TouchList) => {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
   // タッチ開始
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 1) {
+      // シングルタッチ（ドラッグ）
       setIsDragging(true);
       setStartX(e.touches[0].clientX);
       setStartTranslateX(translateX);
+    } else if (e.touches.length === 2) {
+      // ピンチズーム開始
+      setIsDragging(false);
+      const distance = getDistance(e.touches);
+      setInitialPinchDistance(distance);
+      setInitialPinchScale(scale);
     }
-  }, [translateX]);
+  }, [translateX, scale]);
 
   // タッチ移動
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!isDragging || e.touches.length !== 1) return;
-    const deltaX = e.touches[0].clientX - startX;
-    const newTranslateX = clampTranslateX(startTranslateX + deltaX, scale, imageDimensions.width);
-    setTranslateX(newTranslateX);
-  }, [isDragging, startX, startTranslateX, scale, clampTranslateX, imageDimensions.width]);
+    if (e.touches.length === 1 && isDragging) {
+      // シングルタッチ（ドラッグ）
+      const deltaX = e.touches[0].clientX - startX;
+      const newTranslateX = clampTranslateX(startTranslateX + deltaX, scale, imageDimensions.width);
+      setTranslateX(newTranslateX);
+    } else if (e.touches.length === 2 && initialPinchDistance > 0) {
+      // ピンチズーム
+      const currentDistance = getDistance(e.touches);
+      const scaleChange = currentDistance / initialPinchDistance;
+      const newScale = Math.min(Math.max(initialPinchScale * scaleChange, minScale), maxScale);
+      setScale(newScale);
+      
+      // ズーム後に位置を調整
+      setTranslateX(x => clampTranslateX(x, newScale, imageDimensions.width));
+    }
+  }, [isDragging, startX, startTranslateX, scale, clampTranslateX, imageDimensions.width, initialPinchDistance, initialPinchScale]);
 
   // タッチ終了
   const handleTouchEnd = useCallback(() => {
     setIsDragging(false);
+    setInitialPinchDistance(0);
   }, []);
 
   // ホイールでズーム
@@ -153,31 +215,7 @@ export default function Home() {
     });
   }, [clampTranslateX, imageDimensions.width]);
 
-  // ウィンドウリサイズ時に再計算
-  useEffect(() => {
-    const handleResize = () => {
-      if (imageRef.current && containerRef.current) {
-        const img = imageRef.current;
-        const containerWidth = containerRef.current.offsetWidth;
-        const screenHeight = window.innerHeight;
-        const aspectRatio = img.naturalWidth / img.naturalHeight;
-        const displayWidth = screenHeight * aspectRatio;
-        
-        setImageDimensions({
-          width: displayWidth,
-          height: screenHeight,
-        });
-        
-        // リサイズ後にtranslateXを調整
-        setTranslateX(x => clampTranslateX(x, scale, displayWidth));
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [scale, clampTranslateX]);
-
-  // マウスが画面外に出た時のドラッグ終了
+  // グローバルマウスアップ
   useEffect(() => {
     const handleGlobalMouseUp = () => setIsDragging(false);
     window.addEventListener('mouseup', handleGlobalMouseUp);
@@ -187,7 +225,7 @@ export default function Home() {
   return (
     <div 
       ref={containerRef}
-      className="relative w-screen h-screen overflow-hidden bg-[#e8e4d9]"
+      className="relative w-screen overflow-hidden bg-[#e8e4d9]"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -196,7 +234,11 @@ export default function Home() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onWheel={handleWheel}
-      style={{ touchAction: 'none', cursor: isDragging ? 'grabbing' : 'grab' }}
+      style={{ 
+        touchAction: 'none', 
+        cursor: isDragging ? 'grabbing' : 'grab',
+        height: `${viewportHeight}px`,
+      }}
     >
       {/* Map Image */}
       <img
@@ -206,7 +248,7 @@ export default function Home() {
         className="select-none"
         draggable={false}
         style={{
-          height: '100vh',
+          height: `${viewportHeight}px`,
           width: 'auto',
           maxWidth: 'none',
           transform: `translateX(${translateX}px) scale(${scale})`,
@@ -217,61 +259,61 @@ export default function Home() {
         onLoad={handleImageLoad}
       />
 
-      {/* Retro HUD Controls */}
-      <div className="absolute bottom-8 right-6 flex flex-col gap-4 z-50">
-        <div className="flex flex-col gap-2 bg-white/80 backdrop-blur-sm p-2 rounded-full shadow-xl border-2 border-[#d4c5a3]">
+      {/* Zoom Controls - 画面内に固定 */}
+      <div 
+        className="fixed flex flex-col gap-2 z-50"
+        style={{
+          bottom: 'max(env(safe-area-inset-bottom, 16px), 16px)',
+          right: 'max(env(safe-area-inset-right, 16px), 16px)',
+        }}
+      >
+        <div className="flex flex-col gap-2 bg-white/90 backdrop-blur-sm p-2 rounded-2xl shadow-xl border-2 border-[#d4c5a3]">
           <Button
             variant="ghost"
             size="icon"
             onClick={handleZoomIn}
             onMouseDown={(e) => e.stopPropagation()}
-            className="rounded-full w-12 h-12 bg-primary text-primary-foreground hover:bg-primary/90 hover:scale-105 transition-all shadow-md border-2 border-white/20"
+            onTouchStart={(e) => e.stopPropagation()}
+            className="rounded-full w-11 h-11 bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all shadow-md"
             aria-label="Zoom In"
           >
-            <ZoomIn className="w-6 h-6" />
+            <ZoomIn className="w-5 h-5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={handleZoomOut}
             onMouseDown={(e) => e.stopPropagation()}
-            className="rounded-full w-12 h-12 bg-secondary text-secondary-foreground hover:bg-secondary/80 hover:scale-105 transition-all shadow-md border-2 border-[#8b5e3c]/10"
+            onTouchStart={(e) => e.stopPropagation()}
+            className="rounded-full w-11 h-11 bg-secondary text-secondary-foreground hover:bg-secondary/80 active:scale-95 transition-all shadow-md"
             aria-label="Zoom Out"
           >
-            <ZoomOut className="w-6 h-6" />
+            <ZoomOut className="w-5 h-5" />
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={handleReset}
             onMouseDown={(e) => e.stopPropagation()}
-            className="rounded-full w-12 h-12 bg-accent text-accent-foreground hover:bg-accent/90 hover:scale-105 transition-all shadow-md border-2 border-white/20"
+            onTouchStart={(e) => e.stopPropagation()}
+            className="rounded-full w-11 h-11 bg-accent text-accent-foreground hover:bg-accent/90 active:scale-95 transition-all shadow-md"
             aria-label="Reset View"
           >
-            <RotateCcw className="w-6 h-6" />
+            <RotateCcw className="w-5 h-5" />
           </Button>
         </div>
       </div>
 
-      {/* Header / Title Badge */}
-      <div className="absolute top-6 left-6 z-50 pointer-events-none">
-        <div className="bg-white/90 backdrop-blur-md px-6 py-3 rounded-2xl shadow-lg border-2 border-primary/20 transform -rotate-1">
-          <div className="flex items-center gap-3">
-            <div className="bg-primary p-2 rounded-lg shadow-inner">
-              <MapIcon className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-heading text-primary leading-none">HAKUSEKIKAN</h1>
-              <p className="text-xs font-bold text-muted-foreground tracking-wider uppercase mt-1">Crowd Map</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Scale Indicator */}
-      <div className="absolute bottom-8 left-6 z-40 pointer-events-none opacity-80">
-        <div className="bg-black/40 backdrop-blur-sm text-white px-3 py-1 rounded-md text-xs font-mono">
-          Scale: {Math.round(scale * 100)}%
+      {/* Scale Indicator - 左下に固定 */}
+      <div 
+        className="fixed z-40 pointer-events-none opacity-80"
+        style={{
+          bottom: 'max(env(safe-area-inset-bottom, 16px), 16px)',
+          left: 'max(env(safe-area-inset-left, 16px), 16px)',
+        }}
+      >
+        <div className="bg-black/50 backdrop-blur-sm text-white px-3 py-1.5 rounded-lg text-xs font-mono">
+          {Math.round(scale * 100)}%
         </div>
       </div>
     </div>
