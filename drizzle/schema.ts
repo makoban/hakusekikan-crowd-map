@@ -1,21 +1,25 @@
-import { pgTable, serial, varchar, timestamp, integer, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, varchar, timestamp, integer, pgEnum, real, text } from "drizzle-orm/pg-core";
 
 /**
  * 混雑状況のステータス定義
- * - available: 空いている
- * - slightly_crowded: やや混雑
- * - crowded: 混雑
+ * - available: 空いている（青）
+ * - normal: 通常（緑）
+ * - crowded: 混雑（赤）
  */
-export const statusEnum = pgEnum("status_enum", ["available", "slightly_crowded", "crowded"]);
+export const statusEnum = pgEnum("status_enum", ["available", "normal", "crowded"]);
 
 /**
  * spots テーブル - 各スポット（宝石探し、化石発掘など）の状態管理
- * 既存のkokotomo-db-stagingのテーブル構造に準拠
+ * マップ上の座標（パーセント）と混雑状況を管理
  */
 export const spots = pgTable("spots", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 100 }).notNull(),
+  description: text("description"), // スポットの説明
   status: varchar("status", { length: 20 }).default("available").notNull(),
+  waitTime: integer("wait_time").default(0), // 待ち時間（分）
+  positionX: real("position_x").notNull().default(50), // マップ上のX座標（%）
+  positionY: real("position_y").notNull().default(50), // マップ上のY座標（%）
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -24,12 +28,12 @@ export type InsertSpot = typeof spots.$inferInsert;
 
 /**
  * congestion_logs テーブル - 混雑状況の履歴（分析用）
- * 既存のkokotomo-db-stagingのテーブル構造に準拠
  */
 export const congestionLogs = pgTable("congestion_logs", {
   id: serial("id").primaryKey(),
   spotId: integer("spot_id").references(() => spots.id),
   status: varchar("status", { length: 20 }).notNull(),
+  waitTime: integer("wait_time").default(0),
   recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

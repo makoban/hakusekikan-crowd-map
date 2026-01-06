@@ -1,6 +1,56 @@
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 import { useRef, useState, useEffect, useCallback } from "react";
+import { CrowdMarker, SpotDetailPopup, SpotData } from "@/components/CrowdMarker";
+
+// モックデータ（後でAPIから取得）
+const mockSpots: SpotData[] = [
+  {
+    id: 1,
+    name: "宝石さがし体験",
+    description: "砂の中から本物の宝石を探し出す人気アトラクション。見つけた宝石はお持ち帰りできます。",
+    status: "crowded",
+    waitTime: 30,
+    positionX: 58,
+    positionY: 22,
+  },
+  {
+    id: 2,
+    name: "化石発掘",
+    description: "本物の化石を発掘する体験ができます。発掘した化石は持ち帰れます。",
+    status: "normal",
+    waitTime: 10,
+    positionX: 88,
+    positionY: 18,
+  },
+  {
+    id: 3,
+    name: "鉱山体験館",
+    description: "鉱山の歴史や宝石の成り立ちを学べる展示館。",
+    status: "available",
+    waitTime: 0,
+    positionX: 78,
+    positionY: 35,
+  },
+  {
+    id: 4,
+    name: "ミュージアムショップ",
+    description: "宝石や鉱物のお土産が購入できるショップ。",
+    status: "normal",
+    waitTime: 5,
+    positionX: 38,
+    positionY: 58,
+  },
+  {
+    id: 5,
+    name: "喫茶MW（ムウ）",
+    description: "休憩できるカフェ。軽食やドリンクをお楽しみいただけます。",
+    status: "available",
+    waitTime: 0,
+    positionX: 52,
+    positionY: 78,
+  },
+];
 
 export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -10,6 +60,7 @@ export default function Home() {
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [selectedSpot, setSelectedSpot] = useState<SpotData | null>(null);
   
   // タッチ操作用のref
   const touchStateRef = useRef({
@@ -296,6 +347,18 @@ export default function Home() {
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
   }, [scale, clampPosition]);
 
+  // マーカータップ時
+  const handleMarkerTap = useCallback((spot: SpotData) => {
+    setSelectedSpot(spot);
+  }, []);
+
+  // マーカーの画面上の位置を計算
+  const getMarkerScreenPosition = (spot: SpotData) => {
+    const x = position.x + (imageDimensions.width * spot.positionX / 100) * scale;
+    const y = position.y + (imageDimensions.height * spot.positionY / 100) * scale;
+    return { x, y };
+  };
+
   return (
     <div 
       ref={containerRef}
@@ -322,16 +385,62 @@ export default function Home() {
         className="select-none absolute"
         draggable={false}
         style={{
-          height: `${imageDimensions.height}px`,
           width: `${imageDimensions.width}px`,
+          height: `${imageDimensions.height}px`,
           maxWidth: 'none',
           transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
           transformOrigin: 'top left',
-          // 操作中はアニメーションなし、指を離したらスムーズに戻る
           transition: isInteracting ? 'none' : 'transform 0.3s ease-out',
         }}
         onLoad={handleImageLoad}
       />
+
+      {/* Crowd Markers - 別レイヤーで画面座標に配置 */}
+      {imageDimensions.width > 0 && mockSpots.map((spot) => {
+        const screenPos = getMarkerScreenPosition(spot);
+        return (
+          <div
+            key={spot.id}
+            className="absolute z-[100]"
+            style={{
+              left: `${screenPos.x}px`,
+              top: `${screenPos.y}px`,
+              transform: 'translate(-50%, -100%)',
+              transition: isInteracting ? 'none' : 'left 0.3s ease-out, top 0.3s ease-out',
+              pointerEvents: 'auto',
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleMarkerTap(spot);
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              handleMarkerTap(spot);
+            }}
+          >
+            <svg
+              width={28}
+              height={28}
+              viewBox="0 0 24 24"
+              style={{
+                filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.4))",
+                cursor: 'pointer',
+              }}
+              className="hover:scale-125 active:scale-95 transition-transform"
+            >
+              <path
+                d="M12 2 L22 20 L2 20 Z"
+                fill={spot.status === 'crowded' ? '#EF4444' : spot.status === 'normal' ? '#22C55E' : '#3B82F6'}
+                stroke="white"
+                strokeWidth="2.5"
+              />
+            </svg>
+          </div>
+        );
+      })}
 
       {/* Zoom Controls - 画面下部に固定 */}
       <div 
@@ -390,6 +499,14 @@ export default function Home() {
           {Math.round(scale * 100)}%
         </div>
       </div>
+
+      {/* Spot Detail Popup */}
+      {selectedSpot && (
+        <SpotDetailPopup
+          spot={selectedSpot}
+          onClose={() => setSelectedSpot(null)}
+        />
+      )}
     </div>
   );
 }
