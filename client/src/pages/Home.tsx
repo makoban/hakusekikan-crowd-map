@@ -6,24 +6,25 @@ export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const [scale, setScale] = useState(1);
-  const [translateX, setTranslateX] = useState(0);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [startX, setStartX] = useState(0);
-  const [startTranslateX, setStartTranslateX] = useState(0);
-  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [positionStart, setPositionStart] = useState({ x: 0, y: 0 });
+  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0, naturalWidth: 0, naturalHeight: 0 });
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   
   // ピンチズーム用の状態
   const [initialPinchDistance, setInitialPinchDistance] = useState(0);
   const [initialPinchScale, setInitialPinchScale] = useState(1);
+  const [pinchCenter, setPinchCenter] = useState({ x: 0, y: 0 });
+  const [initialPinchPosition, setInitialPinchPosition] = useState({ x: 0, y: 0 });
 
   const minScale = 1;
   const maxScale = 4;
 
-  // ビューポートの高さを取得（モバイルブラウザのURL欄を考慮）
+  // ビューポートの高さを取得
   useEffect(() => {
     const updateViewportHeight = () => {
-      // CSS変数でビューポート高さを設定
       const vh = window.innerHeight;
       setViewportHeight(vh);
       document.documentElement.style.setProperty('--vh', `${vh}px`);
@@ -32,33 +33,45 @@ export default function Home() {
     updateViewportHeight();
     window.addEventListener('resize', updateViewportHeight);
     window.addEventListener('orientationchange', updateViewportHeight);
-    
-    // モバイルブラウザでスクロール時にURL欄が隠れた時の対応
-    window.addEventListener('scroll', updateViewportHeight);
 
     return () => {
       window.removeEventListener('resize', updateViewportHeight);
       window.removeEventListener('orientationchange', updateViewportHeight);
-      window.removeEventListener('scroll', updateViewportHeight);
     };
   }, []);
 
-  // translateXの範囲を制限する関数
-  const clampTranslateX = useCallback((x: number, currentScale: number, imgWidth: number) => {
-    if (!containerRef.current) return x;
+  // 位置の制限（余白が見えないように）
+  const clampPosition = useCallback((x: number, y: number, currentScale: number) => {
+    if (!containerRef.current || imageDimensions.width === 0) return { x, y };
     
     const containerWidth = containerRef.current.offsetWidth;
-    const scaledImageWidth = imgWidth * currentScale;
+    const containerHeight = viewportHeight;
+    const scaledWidth = imageDimensions.width * currentScale;
+    const scaledHeight = imageDimensions.height * currentScale;
     
-    if (scaledImageWidth <= containerWidth) {
-      return (containerWidth - scaledImageWidth) / 2;
+    let clampedX = x;
+    let clampedY = y;
+    
+    // 横方向の制限
+    if (scaledWidth <= containerWidth) {
+      clampedX = (containerWidth - scaledWidth) / 2;
+    } else {
+      const minX = containerWidth - scaledWidth;
+      const maxX = 0;
+      clampedX = Math.min(maxX, Math.max(minX, x));
     }
     
-    const maxX = 0;
-    const minX = containerWidth - scaledImageWidth;
+    // 縦方向の制限
+    if (scaledHeight <= containerHeight) {
+      clampedY = (containerHeight - scaledHeight) / 2;
+    } else {
+      const minY = containerHeight - scaledHeight;
+      const maxY = 0;
+      clampedY = Math.min(maxY, Math.max(minY, y));
+    }
     
-    return Math.min(maxX, Math.max(minX, x));
-  }, []);
+    return { x: clampedX, y: clampedY };
+  }, [imageDimensions, viewportHeight]);
 
   // 画像読み込み完了時
   const handleImageLoad = useCallback(() => {
@@ -66,99 +79,124 @@ export default function Home() {
       const img = imageRef.current;
       const containerWidth = containerRef.current.offsetWidth;
       const aspectRatio = img.naturalWidth / img.naturalHeight;
-      const displayWidth = viewportHeight * aspectRatio;
+      const displayHeight = viewportHeight;
+      const displayWidth = displayHeight * aspectRatio;
       
       setImageDimensions({
         width: displayWidth,
-        height: viewportHeight,
+        height: displayHeight,
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
       });
       
-      if (displayWidth > containerWidth) {
-        const centerX = (containerWidth - displayWidth) / 2;
-        setTranslateX(centerX);
-      } else {
-        setTranslateX((containerWidth - displayWidth) / 2);
-      }
+      // 初期位置を中央に設定
+      const initialX = displayWidth > containerWidth ? (containerWidth - displayWidth) / 2 : (containerWidth - displayWidth) / 2;
+      setPosition({ x: initialX, y: 0 });
     }
   }, [viewportHeight]);
 
-  // ビューポート高さ変更時に再計算
+  // ビューポート変更時に再計算
   useEffect(() => {
-    if (imageRef.current && containerRef.current && imageRef.current.complete) {
-      const img = imageRef.current;
+    if (imageRef.current && containerRef.current && imageRef.current.complete && imageDimensions.naturalWidth > 0) {
       const containerWidth = containerRef.current.offsetWidth;
-      const aspectRatio = img.naturalWidth / img.naturalHeight;
-      const displayWidth = viewportHeight * aspectRatio;
+      const aspectRatio = imageDimensions.naturalWidth / imageDimensions.naturalHeight;
+      const displayHeight = viewportHeight;
+      const displayWidth = displayHeight * aspectRatio;
       
-      setImageDimensions({
+      setImageDimensions(prev => ({
+        ...prev,
         width: displayWidth,
-        height: viewportHeight,
-      });
+        height: displayHeight,
+      }));
       
-      setTranslateX(x => clampTranslateX(x, scale, displayWidth));
+      setPosition(prev => clampPosition(prev.x, prev.y, scale));
     }
-  }, [viewportHeight, scale, clampTranslateX]);
+  }, [viewportHeight, scale, clampPosition, imageDimensions.naturalWidth, imageDimensions.naturalHeight]);
 
-  // ズームイン
+  // ズームイン（ボタン）
   const handleZoomIn = useCallback(() => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.offsetWidth;
+    const centerX = containerWidth / 2;
+    const centerY = viewportHeight / 2;
+    
     setScale(prev => {
       const newScale = Math.min(prev * 1.3, maxScale);
-      setTimeout(() => {
-        setTranslateX(x => clampTranslateX(x, newScale, imageDimensions.width));
-      }, 0);
+      const scaleRatio = newScale / prev;
+      
+      setPosition(pos => {
+        const newX = centerX - (centerX - pos.x) * scaleRatio;
+        const newY = centerY - (centerY - pos.y) * scaleRatio;
+        return clampPosition(newX, newY, newScale);
+      });
+      
       return newScale;
     });
-  }, [clampTranslateX, imageDimensions.width]);
+  }, [viewportHeight, clampPosition]);
 
-  // ズームアウト
+  // ズームアウト（ボタン）
   const handleZoomOut = useCallback(() => {
+    if (!containerRef.current) return;
+    const containerWidth = containerRef.current.offsetWidth;
+    const centerX = containerWidth / 2;
+    const centerY = viewportHeight / 2;
+    
     setScale(prev => {
       const newScale = Math.max(prev / 1.3, minScale);
-      setTimeout(() => {
-        setTranslateX(x => clampTranslateX(x, newScale, imageDimensions.width));
-      }, 0);
+      const scaleRatio = newScale / prev;
+      
+      setPosition(pos => {
+        const newX = centerX - (centerX - pos.x) * scaleRatio;
+        const newY = centerY - (centerY - pos.y) * scaleRatio;
+        return clampPosition(newX, newY, newScale);
+      });
+      
       return newScale;
     });
-  }, [clampTranslateX, imageDimensions.width]);
+  }, [viewportHeight, clampPosition]);
 
   // リセット
   const handleReset = useCallback(() => {
-    if (containerRef.current) {
+    if (containerRef.current && imageDimensions.width > 0) {
       const containerWidth = containerRef.current.offsetWidth;
       setScale(1);
-      if (imageDimensions.width > containerWidth) {
-        const centerX = (containerWidth - imageDimensions.width) / 2;
-        setTranslateX(centerX);
-      } else {
-        setTranslateX((containerWidth - imageDimensions.width) / 2);
-      }
+      const initialX = imageDimensions.width > containerWidth 
+        ? (containerWidth - imageDimensions.width) / 2 
+        : (containerWidth - imageDimensions.width) / 2;
+      setPosition({ x: initialX, y: 0 });
     }
   }, [imageDimensions.width]);
 
-  // マウスドラッグ
+  // マウスドラッグ開始
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
-    setStartX(e.clientX);
-    setStartTranslateX(translateX);
-  }, [translateX]);
+    setDragStart({ x: e.clientX, y: e.clientY });
+    setPositionStart(position);
+  }, [position]);
 
+  // マウスドラッグ中
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging) return;
-    const deltaX = e.clientX - startX;
-    const newTranslateX = clampTranslateX(startTranslateX + deltaX, scale, imageDimensions.width);
-    setTranslateX(newTranslateX);
-  }, [isDragging, startX, startTranslateX, scale, clampTranslateX, imageDimensions.width]);
+    const deltaX = e.clientX - dragStart.x;
+    const deltaY = e.clientY - dragStart.y;
+    const newPos = clampPosition(positionStart.x + deltaX, positionStart.y + deltaY, scale);
+    setPosition(newPos);
+  }, [isDragging, dragStart, positionStart, scale, clampPosition]);
 
+  // マウスドラッグ終了
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
   }, []);
 
-  // 2点間の距離を計算
-  const getDistance = (touches: React.TouchList) => {
+  // 2点間の距離と中心点を計算
+  const getPinchData = (touches: React.TouchList) => {
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
-    return Math.sqrt(dx * dx + dy * dy);
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const centerX = (touches[0].clientX + touches[1].clientX) / 2;
+    const centerY = (touches[0].clientY + touches[1].clientY) / 2;
+    return { distance, centerX, centerY };
   };
 
   // タッチ開始
@@ -166,54 +204,78 @@ export default function Home() {
     if (e.touches.length === 1) {
       // シングルタッチ（ドラッグ）
       setIsDragging(true);
-      setStartX(e.touches[0].clientX);
-      setStartTranslateX(translateX);
+      setDragStart({ x: e.touches[0].clientX, y: e.touches[0].clientY });
+      setPositionStart(position);
     } else if (e.touches.length === 2) {
       // ピンチズーム開始
       setIsDragging(false);
-      const distance = getDistance(e.touches);
+      const { distance, centerX, centerY } = getPinchData(e.touches);
       setInitialPinchDistance(distance);
       setInitialPinchScale(scale);
+      setPinchCenter({ x: centerX, y: centerY });
+      setInitialPinchPosition(position);
     }
-  }, [translateX, scale]);
+  }, [position, scale]);
 
   // タッチ移動
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 1 && isDragging) {
       // シングルタッチ（ドラッグ）
-      const deltaX = e.touches[0].clientX - startX;
-      const newTranslateX = clampTranslateX(startTranslateX + deltaX, scale, imageDimensions.width);
-      setTranslateX(newTranslateX);
+      const deltaX = e.touches[0].clientX - dragStart.x;
+      const deltaY = e.touches[0].clientY - dragStart.y;
+      const newPos = clampPosition(positionStart.x + deltaX, positionStart.y + deltaY, scale);
+      setPosition(newPos);
     } else if (e.touches.length === 2 && initialPinchDistance > 0) {
-      // ピンチズーム
-      const currentDistance = getDistance(e.touches);
-      const scaleChange = currentDistance / initialPinchDistance;
+      // ピンチズーム - 指の中心点を基準に拡大
+      const { distance } = getPinchData(e.touches);
+      const scaleChange = distance / initialPinchDistance;
       const newScale = Math.min(Math.max(initialPinchScale * scaleChange, minScale), maxScale);
-      setScale(newScale);
       
-      // ズーム後に位置を調整
-      setTranslateX(x => clampTranslateX(x, newScale, imageDimensions.width));
+      // ピンチ中心点を基準にズーム
+      const scaleRatio = newScale / initialPinchScale;
+      const newX = pinchCenter.x - (pinchCenter.x - initialPinchPosition.x) * scaleRatio;
+      const newY = pinchCenter.y - (pinchCenter.y - initialPinchPosition.y) * scaleRatio;
+      
+      setScale(newScale);
+      // ピンチ中は余白を許容（指を離したときに制限）
+      setPosition({ x: newX, y: newY });
     }
-  }, [isDragging, startX, startTranslateX, scale, clampTranslateX, imageDimensions.width, initialPinchDistance, initialPinchScale]);
+  }, [isDragging, dragStart, positionStart, scale, clampPosition, initialPinchDistance, initialPinchScale, pinchCenter, initialPinchPosition]);
 
   // タッチ終了
   const handleTouchEnd = useCallback(() => {
     setIsDragging(false);
+    if (initialPinchDistance > 0) {
+      // ピンチ終了時に位置を制限
+      setPosition(pos => clampPosition(pos.x, pos.y, scale));
+    }
     setInitialPinchDistance(0);
-  }, []);
+  }, [initialPinchDistance, scale, clampPosition]);
 
   // ホイールでズーム
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    
     setScale(prev => {
       const newScale = Math.min(Math.max(prev * delta, minScale), maxScale);
-      setTimeout(() => {
-        setTranslateX(x => clampTranslateX(x, newScale, imageDimensions.width));
-      }, 0);
+      const scaleRatio = newScale / prev;
+      
+      setPosition(pos => {
+        const newX = mouseX - (mouseX - pos.x) * scaleRatio;
+        const newY = mouseY - (mouseY - pos.y) * scaleRatio;
+        return clampPosition(newX, newY, newScale);
+      });
+      
       return newScale;
     });
-  }, [clampTranslateX, imageDimensions.width]);
+  }, [clampPosition]);
 
   // グローバルマウスアップ
   useEffect(() => {
@@ -245,26 +307,25 @@ export default function Home() {
         ref={imageRef}
         src="/map.png"
         alt="Hakusekikan Park Map"
-        className="select-none"
+        className="select-none absolute"
         draggable={false}
         style={{
-          height: `${viewportHeight}px`,
-          width: 'auto',
+          height: `${imageDimensions.height}px`,
+          width: `${imageDimensions.width}px`,
           maxWidth: 'none',
-          transform: `translateX(${translateX}px) scale(${scale})`,
-          transformOrigin: 'left center',
-          filter: 'sepia(0.1) contrast(1.05)',
-          transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+          transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+          transformOrigin: 'top left',
+          transition: isDragging || initialPinchDistance > 0 ? 'none' : 'transform 0.1s ease-out',
         }}
         onLoad={handleImageLoad}
       />
 
-      {/* Zoom Controls - 画面内に固定 */}
+      {/* Zoom Controls - 画面下部に固定（URL欄より上） */}
       <div 
-        className="fixed flex flex-col gap-2 z-50"
+        className="absolute flex flex-col gap-2 z-50"
         style={{
-          bottom: 'max(env(safe-area-inset-bottom, 16px), 16px)',
-          right: 'max(env(safe-area-inset-right, 16px), 16px)',
+          bottom: '120px',
+          right: '16px',
         }}
       >
         <div className="flex flex-col gap-2 bg-white/90 backdrop-blur-sm p-2 rounded-2xl shadow-xl border-2 border-[#d4c5a3]">
@@ -274,10 +335,10 @@ export default function Home() {
             onClick={handleZoomIn}
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
-            className="rounded-full w-11 h-11 bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all shadow-md"
+            className="rounded-full w-12 h-12 bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all shadow-md"
             aria-label="Zoom In"
           >
-            <ZoomIn className="w-5 h-5" />
+            <ZoomIn className="w-6 h-6" />
           </Button>
           <Button
             variant="ghost"
@@ -285,10 +346,10 @@ export default function Home() {
             onClick={handleZoomOut}
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
-            className="rounded-full w-11 h-11 bg-secondary text-secondary-foreground hover:bg-secondary/80 active:scale-95 transition-all shadow-md"
+            className="rounded-full w-12 h-12 bg-secondary text-secondary-foreground hover:bg-secondary/80 active:scale-95 transition-all shadow-md"
             aria-label="Zoom Out"
           >
-            <ZoomOut className="w-5 h-5" />
+            <ZoomOut className="w-6 h-6" />
           </Button>
           <Button
             variant="ghost"
@@ -296,23 +357,23 @@ export default function Home() {
             onClick={handleReset}
             onMouseDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
-            className="rounded-full w-11 h-11 bg-accent text-accent-foreground hover:bg-accent/90 active:scale-95 transition-all shadow-md"
+            className="rounded-full w-12 h-12 bg-accent text-accent-foreground hover:bg-accent/90 active:scale-95 transition-all shadow-md"
             aria-label="Reset View"
           >
-            <RotateCcw className="w-5 h-5" />
+            <RotateCcw className="w-6 h-6" />
           </Button>
         </div>
       </div>
 
       {/* Scale Indicator - 左下に固定 */}
       <div 
-        className="fixed z-40 pointer-events-none opacity-80"
+        className="absolute z-40 pointer-events-none opacity-80"
         style={{
-          bottom: 'max(env(safe-area-inset-bottom, 16px), 16px)',
-          left: 'max(env(safe-area-inset-left, 16px), 16px)',
+          bottom: '120px',
+          left: '16px',
         }}
       >
-        <div className="bg-black/50 backdrop-blur-sm text-white px-3 py-1.5 rounded-lg text-xs font-mono">
+        <div className="bg-black/50 backdrop-blur-sm text-white px-3 py-1.5 rounded-lg text-sm font-mono">
           {Math.round(scale * 100)}%
         </div>
       </div>
