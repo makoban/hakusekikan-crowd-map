@@ -1,0 +1,22 @@
+# Render Blueprint - hakusekikan-crowd-map
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: hakusekikan-crowd-map
+    runtime: node
+    region: singapore  # アジア圏向けに最適化
+    plan: free  # 必要に応じてstarter, standard等に変更
+    buildCommand: pnpm install && pnpm build
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false  # Render管理画面で手動設定（既存DBのURLを入力）
+      - key: JWT_SECRET
+        generateValue: true  # 自動生成
+      - key: PORT
+        value: 3000
+    healthCheckPath: /
+    autoDeploy: true  # GitHubへのプッシュ時に自動デプロイ
